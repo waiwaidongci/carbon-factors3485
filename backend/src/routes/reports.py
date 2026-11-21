@@ -2,21 +2,25 @@ from fastapi import APIRouter,Depends,HTTPException
 from fastapi.responses import Response
 from src.config.database import database
 from src.controllers.auth import current,editor,admin
-from src.models.run import Run
+from src.models.run import Run,RunBatch
 from src.schemas.requests import RunInput,ReviewInput
 from src.services.report import submit,approve
 from src.services.export import csv_text
 from src.utils.serialize import row
 router=APIRouter()
+def with_batches(db,obj):
+ d=row(obj)
+ d['batches']=[{'batch':b.batch_index,'status':b.status,'records':len(b.payload['sources']),'posted_at':b.posted_at} for b in db.query(RunBatch).filter_by(run_id=obj.id).order_by(RunBatch.batch_index).all()]
+ return d
 @router.get('/runs')
-def runs(db=Depends(database),u=Depends(current)): return [row(x) for x in db.query(Run).order_by(Run.id.desc()).all()]
+def runs(db=Depends(database),u=Depends(current)): return [with_batches(db,x) for x in db.query(Run).order_by(Run.id.desc()).all()]
 @router.post('/runs')
 def create(b:RunInput,db=Depends(database),u=Depends(editor)): return row(submit(db,u,b))
 @router.get('/runs/{id}')
 def detail(id:int,db=Depends(database),u=Depends(current)):
  obj=db.get(Run,id)
  if not obj: raise HTTPException(404,'报告不存在')
- return row(obj)
+ return with_batches(db,obj)
 @router.post('/runs/{id}/approve')
 def review(id:int,b:ReviewInput,db=Depends(database),u=Depends(admin)): return row(approve(db,u,id,b.note))
 @router.get('/runs/{id}/csv')

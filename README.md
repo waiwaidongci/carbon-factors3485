@@ -7,6 +7,8 @@
 
 模块：业务总览、业务底稿、新建口径版本、异步核算与复核、定时交付、站内收件箱、审计。底稿可新增/修改/删除；口径仅新增版本；报告提交时冻结来源与版本并保存SHA256。定时交付引用已复核报告快照，worker到期写入数据库，业务阅读者下载。
 
+核算按冻结底稿分批落账：提交时把快照来源切成批次（默认每批50行，`RUN_BATCH_SIZE`可调），worker逐批计算部分透视并以Decimal字符串落账到`run_batches`，全部入账后才汇总发布为可复核报告，汇总与单次核算逐分一致。worker重启、Redis队列清空或租约到期后，恢复扫描（`RUN_SWEEP_SECONDS`间隔）自动接管：epoch递增做fencing，只接受当前接手方写入，只补未落账批次，重试不重复累计；缺因子等业务错误直接失败不重试。核算页面展示每批落账进度与最终排放。
+
 ## 算法口径
 单位转换、因子版本冻结、用量×因子与部门透视。kWh/MWh单位换算手算；缺单位因子拒绝；因子更新旧报告不变。
 
@@ -39,9 +41,9 @@ docker compose exec -T backend python -m scripts.seed_demo
 ## 工程结构与开发
 Python3.11/FastAPI/SQLAlchemy/Redis，PostgreSQL16；前端原生HTML/CSS/JS ES modules，Nginx代理`/api/`剥前缀至后端。`frontend/src`按api/stores/pages/components/hooks/utils/router/constants/types拆分；`backend/src`按models/schemas/services/controllers/routes/middlewares/config/utils/constants拆分；`backend/scripts/seed_demo.py`自然键幂等且不覆盖用户修改。SQLAlchemy启动创建初始结构，迁移说明在backend/migrations。
 
-后端开发：在backend安装requirements，设置DATABASE_URL/REDIS_URL/JWT_SECRET，`uvicorn src.main:app --reload`；前端可用Nginx或带同等代理的静态开发服务器。前后端全部业务计算在Python。
+后端开发：在backend安装requirements，设置DATABASE_URL/REDIS_URL/JWT_SECRET，`uvicorn src.main:app --reload`；前端可用Nginx或带同等代理的静态开发服务器。前后端全部业务计算在Python。回归验证：`python tests/test_batchrun.py`（分批乱序一致性、丢队列恢复、接管fencing、缺因子失败、底稿冻结）与`python tests/test_api.py`（API全链路），使用内存SQLite与内存队列，无需外部服务。
 
-环境变量：COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、JWT_SECRET（部署替换）、DATABASE_URL、REDIS_URL、SEED_DEMO。`.env`不入Git。数据库/Redis/共享产物为命名卷。共享角色枚举admin/analyst/viewer与状态queued/running/completed/failed分别定义于backend/src/constants/enums.py和frontend/src/constants/enums.js。两个中间件：统一可恢复校验错误、每IP每分钟360请求限流。
+环境变量：COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、JWT_SECRET（部署替换）、DATABASE_URL、REDIS_URL、SEED_DEMO、RUN_BATCH_SIZE（默认50）、RUN_LEASE_SECONDS（默认60）、RUN_SWEEP_SECONDS（默认15）。`.env`不入Git。数据库/Redis/共享产物为命名卷。共享角色枚举admin/analyst/viewer与状态queued/running/completed/failed分别定义于backend/src/constants/enums.py和frontend/src/constants/enums.js。两个中间件：统一可恢复校验错误、每IP每分钟360请求限流。
 
 ## 已知边界
 定时分发为站内收件箱；一名worker轮询执行，无外部邮件。调度发送已复核固定报告快照，不自动重算新数据。时间显示Asia/Shanghai。报告导出适合小型数据；底稿全量加载240行演示数据。Google Fonts不可用时回退serif。后端API以专属字段对象收发，页面通过业务输入控件编辑，不要求用户写JSON。新增来源期间自动可选；专属字段和算法严格校验。JWT演示有效期2小时。
@@ -51,4 +53,4 @@ MIT License。
 ## 实际实体映射
 来源记录（Source，专属业务字段校验）、口径版本（Policy）、核算报告（Run）、交付计划（Schedule）、交付（Delivery）均经数据库→模型→请求schema→service→route/controller→frontend API→store→page。Period为已有来源期间字典，在任务期间选择器使用；不单独作为复杂度计数。底稿JSON为小型多字段单记录存储，不虚构未落库的子实体。
 
-实际表：期间字典 activity_periods；专属来源 activities；冻结口径 emission_factors；异步报告 carbon_runs。
+实际表：期间字典 activity_periods；专属来源 activities；冻结口径 emission_factors；异步报告 carbon_runs；分批落账 run_batches。
